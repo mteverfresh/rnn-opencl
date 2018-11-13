@@ -1,27 +1,34 @@
 #ifndef LSTM_H
 #define LSTM_H
 
+#include "oclabstract.hpp"
+
 class LSTMCell
 {
 	private:
 		//weight memory
-		float *w_forget;
-		float *w_input;
-		float *w_internal;
-		float *w_output;
+		cl_float *w_forget;
+		cl_float *w_input;
+		cl_float *w_internal;
+		cl_float *w_output;
+		//bias memory
+		cl_float *b_forget;
+		cl_float *b_input;
+		cl_float *b_internal;
+		cl_float *b_output;
 
 		//intermediate matrices
-		float *forget_calc;
-		float *input_calc;
-		float *internal_calc;
-		float *concat_input;
+		cl_float *forget_calc;
+		cl_float *input_calc;
+		cl_float *internal_calc;
+		cl_float *concat_input;
 
 		//cell IO
-		float *curr_input;
-		float *curr_output;
-		float *prev_output;
-		float *curr_state;
-		float *prev_state;
+		cl_float *curr_input;
+		cl_float *curr_output;
+		cl_float *prev_output;
+		cl_float *curr_state;
+		cl_float *prev_state;
 
 		//private gate functions
 		inline void forget();
@@ -31,17 +38,8 @@ class LSTMCell
 		inline void nextState();
 		inline void nextOutput();
 	public:
-		LSTMCell();
-		void forwardPass(float *new_input);
-		void backwardPass(float *training_input);
+		LSTMCell(cl_float*, cl_float*, cl_float*, cl_float*);
+		void forwardPass(cl_float *new_input);
+		void backwardPass(cl_float *training_input);
 }
-
-//Other function prototypes
-bool setupOclEnv(char *kernel_file);
-void matrixMultiplyCl(float *a, float *b, float *output);
-void matrixAddCl(float *a, float *b, float *output);
-void sigmoidCl(float *in, float *out);
-void tanhCl(float *in, float *out);
-void matrixConcatCl(float *a, float *b, float *output);
-
 #endif
