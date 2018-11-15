@@ -32,12 +32,12 @@ Date		Change
 */
 
 #include <iostream>
+#include <fstream>
+#include <sstream>
 #include <cstring>
 #include <math.h>
 #include <assert.h>
 #include <CL/opencl.h>
-#include "AOCLUtils/aocl_utils.h"
-#include "graph.h"
 
 #define WINDOW_SIZE 128
 #define MATRIX_SIZE WINDOW_SIZE*6
@@ -49,11 +49,7 @@ cl_device_id 		device = NULL;
 cl_context		context = NULL;
 cl_program		program = NULL;
 cl_command_queue	queue = NULL;
-cl_kernel 		k_matrix_add = NULL;
-cl_kernel		k_matrix_mul = NULL;
-cl_kernel		k_sigmoid = NULL;
-cl_kernel		k_tanh = NULL;
-cl_kernel		k_concat = NULL;
+cl_kernel		kernel = NULL;
 
 //Weight memory
 cl_mem			input_a_buf = NULL;
@@ -65,12 +61,26 @@ cl_float		*input_a;
 cl_float		*input_b;
 cl_float		*output;
 
+cl_int			status;
+
 //function prototypes
 bool init_env(char*);
 void init_data();
 void run_kernel(int);
 void cleanup();
 float rand_float() { return float(rand()) / float(RAND_MAX) * 20.0f - 10.0f; }
+
+using namespace std;
+
+//TODO make this a macro so that __LINE__ actually does what we want
+inline void checkError(int err, int lineno)
+{
+	if(err != CL_SUCCESS)
+	{
+		printf("OpenCL error, line %d\n", lineno);
+		exit(0);
+	}
+}
 
 int main(int argc, char** argv)
 {
@@ -85,122 +95,132 @@ int main(int argc, char** argv)
 	{
 		return -1;
 	}
-	run_kernel(atoi(argv[2]);
+	run_kernel(atoi(argv[2]));
 	cleanup();
 	return 0;
 }
 
 bool init_env(char* kernel_name)
 {
+	//Load in kernel file and extract source and length
+	ifstream kernel_file("kernels.cl");
+	std::stringstream kernel_source_reader;
+	size_t filesize;
+	
+	kernel_source_reader << kernel_file.rdbuf();
+	string kernel_source_str(kernel_source_reader.str());
+	const char* kernel_source = kernel_source_str.c_str();
+	kernel_file.seekg(0, ios::beg);
+	filesize = kernel_file.tellg();
+	kernel_file.seekg(0, ios::end);
+	filesize = kernel_file.tellg() - filesize;
+
 	cl_int status; //holds status of each operation for error checking
 
 	//Get platform
-	platform = findPlatform("Intel(R) FPGA");
-	if (platform == NULL)
-	{
-		printf("Unable to find FPGA OpenCL platform. Exiting.");
-		return false;
-	}
+	status = clGetPlatformIDs(1, &platform, NULL);
+	checkError(status, __LINE__);
 
 	//Get device ID. Since this is only running on the DE5NET for now, we only need to get one device.
 	status = clGetDeviceIDs(platform, CL_DEVICE_TYPE_ALL, 1, &device, NULL);
-	checkError(status, "Failed to get devices");
-
-	printf("Platform: %s\n", getPlatformName(platform).c_str());
-	printf("Using %s for calculation.\n", getDeviceName(device).c_str());
+	checkError(status, __LINE__);
 
 	//Create context
 	context = clCreateContext(NULL, 1, &device, NULL, NULL, &status);
-	checkError(status, "Unable to create OpenCL context.");
+	checkError(status, __LINE__);
 
 	//Create program
-	program = clCreateProgramWithSource(context, "kernels.cl", &device, 1);
+	program = clCreateProgramWithSource(context, 1, &kernel_source, &filesize, NULL);
+	checkError(status, __LINE__);
 
 	//Build program
-	status = clBuildProgram(program, 0, NULL, "", NULL, NULL);
-	checkError(status, "Failed to build program");
+	status = clBuildProgram(program, 0, NULL, NULL, NULL, NULL);
+	checkError(status, __LINE__);
 
 	//Create cmd queue
 	queue = clCreateCommandQueue(context, device, CL_QUEUE_PROFILING_ENABLE, &status);
-	checkError(status, "Failed to create queue");
+	checkError(status, __LINE__);
 
 	//Create kernels
-	k_matrix_add = clCreateKernel(program, kernel_name, &status);
-	checkError(status, "Failed to create kernel");
+	printf("Attempting to build kernel for %s\n", kernel_name);
+	kernel = clCreateKernel(program, kernel_name, &status);
+	checkError(status, __LINE__);
 	
 	//Create buffers
 	input_a_buf = clCreateBuffer(	context, 
 					CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, 
+					sizeof(float)*MATRIX_SIZE,
 					NULL, 
-					CONCAT_SIZE,
 					&status);
-	checkError(status, "Failed to create buffer for first input");
+	checkError(status, __LINE__);
 	input_b_buf = clCreateBuffer(	context, 
 					CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, 
+					sizeof(float)*MATRIX_SIZE,
 					NULL, 
-					CONCAT_SIZE,
 					&status);
-	checkError(status, "Failed to create buffer for second input");
+	checkError(status, __LINE__);
 	output_buf = clCreateBuffer(	context, 
 					CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, 
+					sizeof(float)*MATRIX_SIZE,
 					NULL, 
-					CONCAT_SIZE,
 					&status);
-	checkError(status, "Failed to create buffer for output");
+	checkError(status, __LINE__);
 	return true;
 
 }
 
 void run_kernel(int kernel_args)
 {
+	const size_t global_work_size = MATRIX_SIZE;
+	const size_t local_work_size = WINDOW_SIZE;
+
 	//TODO: set up kernel test here
 	//requires knowledge of number of kernel args from the function parameter
 	clEnqueueWriteBuffer(	queue, 
 				input_a_buf,
 				CL_FALSE, 0, 
-				sizeof(cl_float)*CONCAT_SIZE,
+				sizeof(cl_float)*MATRIX_SIZE,
 				input_a, 
 				0, NULL, NULL);
 	clEnqueueWriteBuffer(	queue, 
 				input_b_buf,
 				CL_FALSE, 0, 
-				sizeof(cl_float)*CONCAT_SIZE,
+				sizeof(cl_float)*MATRIX_SIZE,
 				input_b, 
 				0, NULL, NULL);
 	clEnqueueWriteBuffer(	queue, 
 				output_buf,
 				CL_FALSE, 0, 
-				sizeof(cl_float)*OUTPUT_SIZE,
+				sizeof(cl_float)*MATRIX_SIZE,
 				output, 
 				0, NULL, NULL);
 
 	if(kernel_args == 2)
 	{
 		status = clSetKernelArg(kernel, 0, sizeof(cl_mem), &input_a_buf);
-		checkError(status, "Failed to set kernel arg 0");
+		checkError(status, __LINE__);
 		status = clSetKernelArg(kernel, 1, sizeof(cl_mem), &output_buf);
-		checkError(status, "Failed to set kernel arg 1");
+		checkError(status, __LINE__);
 	}
 	else if(kernel_args == 3)
 	{
 		status = clSetKernelArg(kernel, 0, sizeof(cl_mem), &input_a_buf);
-		checkError(status, "Failed to set kernel arg 0");
+		checkError(status, __LINE__);
 		status = clSetKernelArg(kernel, 1, sizeof(cl_mem), &input_b_buf);
-		checkError(status, "Failed to set kernel arg 1");
+		checkError(status, __LINE__);
 		status = clSetKernelArg(kernel, 2, sizeof(cl_mem), &output_buf);
-		checkError(status, "Failed to set kernel arg 2");
+		checkError(status, __LINE__);
 	}
 	clEnqueueNDRangeKernel(	queue, 
-				k_matrix_mul, 
+				kernel,
 				1, NULL, 
-				&global_work_size, &local_work_size, 
+				&global_work_size, NULL,
 				0, NULL, NULL);
-	checkError(status, "Failed to launch matrix mul kernel");
 
 	clEnqueueReadBuffer(	queue, 
 				output_buf,
 				CL_FALSE, 0, 
-				sizeof(cl_float)*OUTPUT_SIZE,
+				sizeof(cl_float)*MATRIX_SIZE,
 				output, 
 				0, NULL, NULL);
 	clFinish(queue);
