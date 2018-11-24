@@ -35,12 +35,14 @@ Date		Change
 #include <fstream>
 #include <sstream>
 #include <cstring>
-#include <math.h>
+#include <cmath>
 #include <assert.h>
 #include <CL/opencl.h>
+#include "wtime.h"
 
 #define WINDOW_SIZE 128
 #define MATRIX_SIZE WINDOW_SIZE*6
+#define INDEX(ROW, COLUMN, WIDTH) ((ROW)*WIDTH + (COLUMN))
 
 //    D A T A   S T R U C T U R E S    //
 
@@ -60,6 +62,7 @@ cl_mem			output_buf = NULL;
 cl_float		*input_a;
 cl_float		*input_b;
 cl_float		*output;
+cl_float		*test_data;
 
 cl_int			status;
 
@@ -68,16 +71,71 @@ bool init_env(char*);
 void init_data();
 void run_kernel(int);
 void cleanup();
+void checkOutput();
+void sigmoidtest();
+void tanhtest();
+void addtest();
+void multest();
+void concattest();
 float rand_float() { return float(rand()) / float(RAND_MAX) * 20.0f - 10.0f; }
 
 using namespace std;
 
+void sigmoidtest()
+{
+	for(unsigned i = 0; i < MATRIX_SIZE; i++)
+	{
+		float intr_val = exp((double) -input_a[i]);
+		test_data[i] = (1/(1+intr_val));
+	}
+}
+void tanhtest()
+{
+	for(unsigned i = 0; i < MATRIX_SIZE; i++)
+	{
+		test_data[i] = tanh(input_a[i]);
+	}
+}
+void addtest()
+{
+	for(unsigned i = 0; i < MATRIX_SIZE; i++)
+	{
+		test_data[i] = input_a[i] + input_b[i];
+	}
+}
+void multest()
+{
+	for(unsigned i = 0; i < 6; i++)
+	{
+		for(unsigned j = 0; j < WINDOW_SIZE; j++)
+		{
+			for(unsigned k = 0; k < WINDOW_SIZE; k++)
+			test_data[INDEX(i, j, WINDOW_SIZE)] += input_a[INDEX(i, k, WINDOW_SIZE)] * input_b[INDEX(k, j, WINDOW_SIZE)];
+		}
+	}
+}
+void concattest()
+{
+	for(unsigned i = 0; i < MATRIX_SIZE; i++)
+	{
+		test_data[i] = input_a[i] + input_b[i];
+	}
+}
+
+void checkOutput()
+{
+	for(unsigned i = 0; i < MATRIX_SIZE; i++)
+	{
+		assert(output[i] == test_data[i]);
+	}
+}
+
 //TODO make this a macro so that __LINE__ actually does what we want
-inline void checkError(int err, int lineno)
+void checkError(int err, int lineno)
 {
 	if(err != CL_SUCCESS)
 	{
-		printf("OpenCL error, line %d\n", lineno);
+		printf("OpenCL error %d, line %d\n", err, lineno);
 		exit(0);
 	}
 }
@@ -87,9 +145,11 @@ int main(int argc, char** argv)
 	//TODO: set up buffers for test data
 	//these will be of fixed size
 	//see if the reqd_wg_size attribute works outside of altera
-	input_a = (cl_float*)malloc(sizeof(cl_float) * WINDOW_SIZE);
-	input_b = (cl_float*)malloc(sizeof(cl_float) * WINDOW_SIZE);
-	output 	= (cl_float*)malloc(sizeof(cl_float) * WINDOW_SIZE);
+	input_a = (cl_float*)malloc(sizeof(cl_float) * MATRIX_SIZE);
+	input_b = (cl_float*)malloc(sizeof(cl_float) * MATRIX_SIZE);
+	output 	= (cl_float*)malloc(sizeof(cl_float) * MATRIX_SIZE);
+
+	test_data = (cl_float*)malloc(sizeof(cl_float) * MATRIX_SIZE);
 
 	if(!init_env(argv[1]))
 	{
@@ -124,6 +184,13 @@ bool init_env(char* kernel_name)
 	//Get device ID. Since this is only running on the DE5NET for now, we only need to get one device.
 	status = clGetDeviceIDs(platform, CL_DEVICE_TYPE_ALL, 1, &device, NULL);
 	checkError(status, __LINE__);
+	size_t paramsize;
+	char *param;
+	clGetDeviceInfo(device, CL_DEVICE_NAME, 0, NULL, &paramsize);
+	param = (char*)malloc(paramsize);
+	clGetDeviceInfo(device, CL_DEVICE_NAME, paramsize, param, NULL);
+	printf("Device param: %s\n", param);
+	free(param);
 
 	//Create context
 	context = clCreateContext(NULL, 1, &device, NULL, NULL, &status);
@@ -134,17 +201,35 @@ bool init_env(char* kernel_name)
 	checkError(status, __LINE__);
 
 	//Build program
-	status = clBuildProgram(program, 0, NULL, NULL, NULL, NULL);
-	checkError(status, __LINE__);
+	status = clBuildProgram(program, 0, NULL, "", NULL, NULL);
+	if(status != CL_SUCCESS)
+	{
+		printf("Program build failed.\n");
+		clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, NULL, &paramsize);
+		param = (char*)malloc(paramsize);
+		clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, paramsize, param, NULL);
+		printf("%s\n", param);
+		checkError(status, __LINE__);
+	}
 
 	//Create cmd queue
 	queue = clCreateCommandQueue(context, device, CL_QUEUE_PROFILING_ENABLE, &status);
 	checkError(status, __LINE__);
 
 	//Create kernels
-	printf("Attempting to build kernel for %s\n", kernel_name);
+	printf("Attempting to build kernel for %s... ", kernel_name);
 	kernel = clCreateKernel(program, kernel_name, &status);
-	checkError(status, __LINE__);
+	switch(status)
+	{
+		case CL_INVALID_KERNEL_NAME: 
+			printf("Invalid kernel name. Please use a valid kernel in kernels.cl.\n");
+			exit(0);
+			break;
+		case CL_SUCCESS:
+			printf("Build successful.\n");
+		default: checkError(status, __LINE__);
+	}
+	
 	
 	//Create buffers
 	input_a_buf = clCreateBuffer(	context, 
@@ -165,16 +250,21 @@ bool init_env(char* kernel_name)
 					NULL, 
 					&status);
 	checkError(status, __LINE__);
+	//initialize input buffers with some data
+	for(unsigned i = 0; i < MATRIX_SIZE; i++)
+	{
+		input_a[i] = i+1;
+		input_b[i] = i+1;
+	}
 	return true;
-
 }
 
 void run_kernel(int kernel_args)
 {
-	const size_t global_work_size = MATRIX_SIZE;
+	double starttime, endtime;
+	const size_t global_work_size[2] = {WINDOW_SIZE, 6};
 	const size_t local_work_size = WINDOW_SIZE;
 
-	//TODO: set up kernel test here
 	//requires knowledge of number of kernel args from the function parameter
 	clEnqueueWriteBuffer(	queue, 
 				input_a_buf,
@@ -211,11 +301,21 @@ void run_kernel(int kernel_args)
 		status = clSetKernelArg(kernel, 2, sizeof(cl_mem), &output_buf);
 		checkError(status, __LINE__);
 	}
+	//TODO: every time you want a new test, change this function call
+	starttime = wtime();
+	multest();
+	endtime = wtime();
+	printf("Time for CPU test: %g\n", endtime-starttime);
+
+	starttime = wtime();
 	clEnqueueNDRangeKernel(	queue, 
 				kernel,
-				1, NULL, 
-				&global_work_size, NULL,
+				2, NULL, 
+				global_work_size, NULL,
 				0, NULL, NULL);
+	clFinish(queue);
+	endtime = wtime();
+	printf("Time for accelerated test: %g\n", endtime-starttime);
 
 	clEnqueueReadBuffer(	queue, 
 				output_buf,
@@ -224,9 +324,22 @@ void run_kernel(int kernel_args)
 				output, 
 				0, NULL, NULL);
 	clFinish(queue);
+
+	printf("Kernel run successfully\n\n"); 
+
+	checkOutput();
 }
 
 //Required function for AOCL_utils
 void cleanup()
 {
+	clReleaseDevice(device);
+	clReleaseContext(context);
+	clReleaseProgram(program);
+	clReleaseCommandQueue(queue);
+	clReleaseKernel(kernel);
+
+	clReleaseMemObject(input_a_buf);
+	clReleaseMemObject(input_b_buf);
+	clReleaseMemObject(output_buf);
 }
