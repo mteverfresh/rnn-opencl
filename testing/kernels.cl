@@ -47,7 +47,7 @@ __kernel void matrix_mul(
 
 	for(unsigned i = 0; i < ysize; i++)
 	{
-		sum += a[INDEX(row, i, xsize)] * b[INDEX(i, col, xsize)];
+		sum += a[INDEX(row, i, xsize)] * b[INDEX(i, col, ysize)];
 	}
 	out[INDEX(row, col, xsize)] = sum;
 }
