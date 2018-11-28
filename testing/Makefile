@@ -40,8 +40,8 @@ endif
 #endif
 
 # OpenCL compile and link flags.
-AOCL_COMPILE_CONFIG := $(shell aocl compile-config --arm)
-AOCL_LINK_CONFIG := $(shell aocl link-config --arm) -lacl_emulator_kernel_rt
+AOCL_COMPILE_CONFIG := $(shell aocl compile-config)
+AOCL_LINK_CONFIG := $(shell aocl link-config) -lacl_emulator_kernel_rt
 
 # Compilation flags
 ifeq ($(DEBUG),1)
@@ -53,7 +53,7 @@ endif
 CPPFLAGS += -g
 
 # Compiler
-CXX := arm-linux-gnueabihf-g++
+CXX := g++ #arm-linux-gnueabihf-g++
 
 # Target
 TARGET := host

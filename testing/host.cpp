@@ -47,7 +47,7 @@ Date		Change
 #include "AOCLUtils/aocl_utils.h"
 #include "wtime.h"
 
-#define WINDOW_SIZE 2048
+#define WINDOW_SIZE 1024
 #define MATRIX_SIZE WINDOW_SIZE*6
 #define INDEX(ROW, COLUMN, WIDTH) ((ROW)*WIDTH + (COLUMN))
 
@@ -134,14 +134,35 @@ void multest()
 		}
 	}
 }
-void concattest()
+void sigpasstest()
 {
-	for(unsigned i = 0; i < MATRIX_SIZE; i++)
+	/*
+	   this attempts an auto-transpose operation by addressing the matrix differently,
+	   possible because the matrix shape is known and constant
+	   
+	   input_a shape: 6 rows, WINDOW_SIZE cols
+	   input_b shape: WINDOW_SIZE rows, 6 cols
+	*/
+	float sum;
+	for(unsigned i = 0; i < 6; i++)
 	{
-		test_data[i] = input_a[i] + input_b[i];
+		for(unsigned j = 0; j < 6; j++)
+		{
+			sum = 0;
+			for(unsigned k = 0; k < WINDOW_SIZE; k++)
+			{
+				float a_target = input_a[INDEX(i, k, WINDOW_SIZE)];
+				float b_target = input_b[INDEX(j, k, WINDOW_SIZE)];
+
+				float intr_val = exp((double) -(a_target * b_target + input_a[j]));
+				intr_val = (1/(1+intr_val));
+
+				sum += intr_val;
+			}
+			test_data[INDEX(i, j, 6)] = sum;
+		}
 	}
 }
-
 void checkOutput()
 {
 	for(unsigned i = 0; i < MATRIX_SIZE; i++)
@@ -333,6 +354,12 @@ void run_kernel(int kernel_args, std::string kernel_name)
 	{
 		starttime = wtime();
 		tanhtest();
+		endtime = wtime();
+	}
+	else if(kernel_name == "sigpass")
+	{
+		starttime = wtime();
+		sigpasstest();
 		endtime = wtime();
 	}
 	else

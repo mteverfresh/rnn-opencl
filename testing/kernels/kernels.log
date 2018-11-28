@@ -1,0 +1,1 @@
+Compiler Command: aoc kernels.cl -o kernels.aocx -march=emulator -v
