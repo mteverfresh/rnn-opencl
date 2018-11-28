@@ -16,6 +16,7 @@ Date		|	Change
 #define X 0
 #define Y 1
 #define SOURCES 6
+#define MAX_WINDOW_SIZE 1024
 #define PREV_GROUP 0
 #define CURR_GROUP 1
 
@@ -32,24 +33,45 @@ __kernel void matrix_add(
 }
 
 //requries 2d kernel of 128*6
+__attribute__((max_work_group_size(MAX_WINDOW_SIZE)))
 __kernel void matrix_mul(
 	__global const	float *restrict a,
 	__global const	float *restrict b,
 	__global	float *restrict out
 )
 {
-	const int row = get_global_id(X);
-	const int col = get_global_id(Y);
-	const int xsize = get_local_size(X);
-	const int ysize = get_local_size(Y);
+	const int tid = get_global_id(0);
+	const int lid = get_local_id(0);
+	const int gid = get_group_id(0);
+	const int xsize = get_local_size(0);
 
-	float sum = 0;
+	__local float products[MAX_WINDOW_SIZE]; //related to local size
 
-	for(unsigned i = 0; i < ysize; i++)
+	for(unsigned i = 0; i < SOURCES; i++)
 	{
-		sum += a[INDEX(row, i, xsize)] * b[INDEX(i, col, ysize)];
+		//Multiply without transpose, something you can do when the sizes are set
+		for(unsigned j = 0; j < SOURCES; j++)
+		{
+			products[tid] = a[INDEX(i, tid, xsize)] * b[INDEX(j, tid, xsize)];
+			barrier(CLK_LOCAL_MEM_FENCE);
+
+			//Now do the reduction
+			for(unsigned k = xsize/2; k > 0; k /= 2)
+			{
+				if(tid < k)
+				{
+					float sum = products[tid] + products[tid + k];
+					products[tid] = sum;
+				}
+				barrier(CLK_LOCAL_MEM_FENCE);
+			}
+			barrier(CLK_GLOBAL_MEM_FENCE);
+			if(tid == 0)
+			{
+				out[INDEX(i, j, SOURCES)] = products[0];
+			}
+		}
 	}
-	out[INDEX(row, col, xsize)] = sum;
 }
 
 __kernel void sigmoid_activation(

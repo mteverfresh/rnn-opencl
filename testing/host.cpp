@@ -28,6 +28,11 @@ Date		Change
 		This file is being repurposed for a new project: the Data fusion RNN activity recognition project.
 			- Buffers now represent weight memory or intermediate data for the LSTM cell.
 			- Weight memory is loaded in from a file at the beginning of the forward pass
+11/25/18	Updating for compatibility with target system.
+			- This means using binaries for the kernel code and using aocl_utils
+11/28/18	Updated to be more modular from the command line.
+			- Specifying the test no longer requires a recompile
+			- specifying window size still does though
 
 */
 
@@ -36,11 +41,13 @@ Date		Change
 #include <sstream>
 #include <cstring>
 #include <cmath>
+#include <cstdlib>
 #include <assert.h>
 #include <CL/opencl.h>
+#include "AOCLUtils/aocl_utils.h"
 #include "wtime.h"
 
-#define WINDOW_SIZE 128
+#define WINDOW_SIZE 2048
 #define MATRIX_SIZE WINDOW_SIZE*6
 #define INDEX(ROW, COLUMN, WIDTH) ((ROW)*WIDTH + (COLUMN))
 
@@ -69,7 +76,7 @@ cl_int			status;
 //function prototypes
 bool init_env(char*);
 void init_data();
-void run_kernel(int);
+void run_kernel(int, std::string);
 void cleanup();
 void checkOutput();
 void sigmoidtest();
@@ -79,7 +86,8 @@ void multest();
 void concattest();
 float rand_float() { return float(rand()) / float(RAND_MAX) * 20.0f - 10.0f; }
 
-using namespace std;
+using namespace std; 
+using namespace aocl_utils;
 
 void sigmoidtest()
 {
@@ -105,12 +113,24 @@ void addtest()
 }
 void multest()
 {
+	/*
+	   this attempts an auto-transpose operation by addressing the matrix differently,
+	   possible because the matrix shape is known and constant
+	   
+	   input_a shape: 6 rows, WINDOW_SIZE cols
+	   input_b shape: WINDOW_SIZE rows, 6 cols
+	*/
+	float sum;
 	for(unsigned i = 0; i < 6; i++)
 	{
-		for(unsigned j = 0; j < WINDOW_SIZE; j++)
+		for(unsigned j = 0; j < 6; j++)
 		{
+			sum = 0;
 			for(unsigned k = 0; k < WINDOW_SIZE; k++)
-			test_data[INDEX(i, j, WINDOW_SIZE)] += input_a[INDEX(i, k, WINDOW_SIZE)] * input_b[INDEX(k, j, WINDOW_SIZE)];
+			{
+				sum += input_a[INDEX(i, k, WINDOW_SIZE)] * input_b[INDEX(j, k, WINDOW_SIZE)];
+			}
+			test_data[INDEX(i, j, 6)] = sum;
 		}
 	}
 }
@@ -126,95 +146,88 @@ void checkOutput()
 {
 	for(unsigned i = 0; i < MATRIX_SIZE; i++)
 	{
-		assert(output[i] == test_data[i]);
+		if(output[i] != test_data[i])
+		{
+			printf("output differs from test data:\n");
+			printf("output: %f\ttest data: %f\n", output[i], test_data[i]);
+			printf("index: %d\n", i);
+			//exit(0);
+		}
 	}
 }
 
-//TODO make this a macro so that __LINE__ actually does what we want
-void checkError(int err, int lineno)
-{
-	if(err != CL_SUCCESS)
-	{
-		printf("OpenCL error %d, line %d\n", err, lineno);
-		exit(0);
-	}
-}
+////TODO make this a macro so that __LINE__ actually does what we want
+//void checkError(int err, int lineno)
+//{
+//	if(err != CL_SUCCESS)
+//	{
+//		printf("OpenCL error %d, line %d\n", err, lineno);
+//		exit(0);
+//	}
+//}
 
 int main(int argc, char** argv)
 {
 	//TODO: set up buffers for test data
 	//these will be of fixed size
 	//see if the reqd_wg_size attribute works outside of altera
-	input_a = (cl_float*)malloc(sizeof(cl_float) * MATRIX_SIZE);
-	input_b = (cl_float*)malloc(sizeof(cl_float) * MATRIX_SIZE);
-	output 	= (cl_float*)malloc(sizeof(cl_float) * MATRIX_SIZE);
+	input_a = (cl_float*)alignedMalloc(sizeof(cl_float) * MATRIX_SIZE);
+	input_b = (cl_float*)alignedMalloc(sizeof(cl_float) * MATRIX_SIZE);
+	output 	= (cl_float*)alignedMalloc(sizeof(cl_float) * MATRIX_SIZE);
 
 	test_data = (cl_float*)malloc(sizeof(cl_float) * MATRIX_SIZE);
+	srand(time(NULL));
+	//initialize input buffers with some data
+	for(unsigned i = 0; i < MATRIX_SIZE; i++)
+	{
+		input_a[i] = static_cast <float> (rand()) / static_cast <float> (RAND_MAX);
+		input_b[i] = static_cast <float> (rand()) / static_cast <float> (RAND_MAX);
+	}
 
+	std::string kernel_name = argv[1];
 	if(!init_env(argv[1]))
 	{
 		return -1;
 	}
-	run_kernel(atoi(argv[2]));
+	run_kernel(atoi(argv[2]), kernel_name);
 	cleanup();
 	return 0;
 }
 
 bool init_env(char* kernel_name)
 {
-	//Load in kernel file and extract source and length
-	ifstream kernel_file("kernels.cl");
-	std::stringstream kernel_source_reader;
-	size_t filesize;
-	
-	kernel_source_reader << kernel_file.rdbuf();
-	string kernel_source_str(kernel_source_reader.str());
-	const char* kernel_source = kernel_source_str.c_str();
-	kernel_file.seekg(0, ios::beg);
-	filesize = kernel_file.tellg();
-	kernel_file.seekg(0, ios::end);
-	filesize = kernel_file.tellg() - filesize;
-
 	cl_int status; //holds status of each operation for error checking
-
 	//Get platform
-	status = clGetPlatformIDs(1, &platform, NULL);
-	checkError(status, __LINE__);
+	platform = findPlatform("Intel(R) FPGA");
+	if (platform == NULL)
+	{
+		printf("Unable to find FPGA OpenCL platform. Exiting.");
+		return false;
+	}
 
 	//Get device ID. Since this is only running on the DE5NET for now, we only need to get one device.
 	status = clGetDeviceIDs(platform, CL_DEVICE_TYPE_ALL, 1, &device, NULL);
-	checkError(status, __LINE__);
-	size_t paramsize;
-	char *param;
-	clGetDeviceInfo(device, CL_DEVICE_NAME, 0, NULL, &paramsize);
-	param = (char*)malloc(paramsize);
-	clGetDeviceInfo(device, CL_DEVICE_NAME, paramsize, param, NULL);
-	printf("Device param: %s\n", param);
-	free(param);
+	checkError(status, "Failed to get devices");
+
+	printf("Platform: %s\n", getPlatformName(platform).c_str());
+	printf("Using %s for calculation.\n", getDeviceName(device).c_str());
 
 	//Create context
 	context = clCreateContext(NULL, 1, &device, NULL, NULL, &status);
-	checkError(status, __LINE__);
+	checkError(status, "Unable to create OpenCL context.");
 
 	//Create program
-	program = clCreateProgramWithSource(context, 1, &kernel_source, &filesize, NULL);
-	checkError(status, __LINE__);
+	std::string binary_file = getBoardBinaryFile("kernels", device);
+	printf("Using binary %s to program FPGA\n", binary_file.c_str());
+	program = createProgramFromBinary(context, binary_file.c_str(), &device, 1);
 
 	//Build program
 	status = clBuildProgram(program, 0, NULL, "", NULL, NULL);
-	if(status != CL_SUCCESS)
-	{
-		printf("Program build failed.\n");
-		clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, NULL, &paramsize);
-		param = (char*)malloc(paramsize);
-		clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, paramsize, param, NULL);
-		printf("%s\n", param);
-		checkError(status, __LINE__);
-	}
+	checkError(status, "Failed to build program");
 
 	//Create cmd queue
 	queue = clCreateCommandQueue(context, device, CL_QUEUE_PROFILING_ENABLE, &status);
-	checkError(status, __LINE__);
+	checkError(status, "Failed to create queue");
 
 	//Create kernels
 	printf("Attempting to build kernel for %s... ", kernel_name);
@@ -227,9 +240,8 @@ bool init_env(char* kernel_name)
 			break;
 		case CL_SUCCESS:
 			printf("Build successful.\n");
-		default: checkError(status, __LINE__);
+		default: checkError(status, "building kernel");
 	}
-	
 	
 	//Create buffers
 	input_a_buf = clCreateBuffer(	context, 
@@ -237,33 +249,29 @@ bool init_env(char* kernel_name)
 					sizeof(float)*MATRIX_SIZE,
 					NULL, 
 					&status);
-	checkError(status, __LINE__);
+	checkError(status, "input_a");
 	input_b_buf = clCreateBuffer(	context, 
 					CL_MEM_READ_ONLY | CL_MEM_ALLOC_HOST_PTR, 
 					sizeof(float)*MATRIX_SIZE,
 					NULL, 
 					&status);
-	checkError(status, __LINE__);
+	checkError(status, "input_b");
 	output_buf = clCreateBuffer(	context, 
 					CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR, 
 					sizeof(float)*MATRIX_SIZE,
 					NULL, 
 					&status);
-	checkError(status, __LINE__);
-	//initialize input buffers with some data
-	for(unsigned i = 0; i < MATRIX_SIZE; i++)
-	{
-		input_a[i] = i+1;
-		input_b[i] = i+1;
-	}
+	checkError(status, "output");
 	return true;
 }
 
-void run_kernel(int kernel_args)
+void run_kernel(int kernel_args, std::string kernel_name)
 {
 	double starttime, endtime;
-	const size_t global_work_size[2] = {WINDOW_SIZE, 6};
+	const size_t global_work_size = WINDOW_SIZE;
 	const size_t local_work_size = WINDOW_SIZE;
+
+	printf("global work size: %u\n", global_work_size);
 
 	//requires knowledge of number of kernel args from the function parameter
 	clEnqueueWriteBuffer(	queue, 
@@ -288,31 +296,59 @@ void run_kernel(int kernel_args)
 	if(kernel_args == 2)
 	{
 		status = clSetKernelArg(kernel, 0, sizeof(cl_mem), &input_a_buf);
-		checkError(status, __LINE__);
+		checkError(status, "kernel arg 0");
 		status = clSetKernelArg(kernel, 1, sizeof(cl_mem), &output_buf);
-		checkError(status, __LINE__);
+		checkError(status, "kernel arg 1");
 	}
 	else if(kernel_args == 3)
 	{
 		status = clSetKernelArg(kernel, 0, sizeof(cl_mem), &input_a_buf);
-		checkError(status, __LINE__);
+		checkError(status, "kernel arg 0");
 		status = clSetKernelArg(kernel, 1, sizeof(cl_mem), &input_b_buf);
-		checkError(status, __LINE__);
+		checkError(status, "kernel arg 1");
 		status = clSetKernelArg(kernel, 2, sizeof(cl_mem), &output_buf);
-		checkError(status, __LINE__);
+		checkError(status, "kernel arg 2");
 	}
 	//TODO: every time you want a new test, change this function call
-	starttime = wtime();
-	multest();
-	endtime = wtime();
+	printf("Running CPU test for %s:\n", kernel_name.c_str());
+	if(kernel_name == "matrix_add")
+	{
+		starttime = wtime();
+		addtest();
+		endtime = wtime();
+	}
+	else if(kernel_name == "matrix_mul")
+	{
+		starttime = wtime();
+		multest();
+		endtime = wtime();
+	}
+	else if(kernel_name == "sigmoid_activation")
+	{
+		starttime = wtime();
+		sigmoidtest();
+		endtime = wtime();
+	}
+	else if(kernel_name == "tanh_activation")
+	{
+		starttime = wtime();
+		tanhtest();
+		endtime = wtime();
+	}
+	else
+	{
+		printf("invalid kernel name, should have been caught earlier!\n");
+	}
+
 	printf("Time for CPU test: %g\n", endtime-starttime);
 
 	starttime = wtime();
-	clEnqueueNDRangeKernel(	queue, 
+	status = clEnqueueNDRangeKernel(queue, 
 				kernel,
-				2, NULL, 
-				global_work_size, NULL,
+				1, NULL, 
+				&global_work_size, &local_work_size,
 				0, NULL, NULL);
+	checkError(status, "Failed to launch kernel");
 	clFinish(queue);
 	endtime = wtime();
 	printf("Time for accelerated test: %g\n", endtime-starttime);
@@ -325,15 +361,14 @@ void run_kernel(int kernel_args)
 				0, NULL, NULL);
 	clFinish(queue);
 
-	printf("Kernel run successfully\n\n"); 
-
 	checkOutput();
+
+	printf("Kernel run successfully\n\n"); 
 }
 
 //Required function for AOCL_utils
 void cleanup()
 {
-	clReleaseDevice(device);
 	clReleaseContext(context);
 	clReleaseProgram(program);
 	clReleaseCommandQueue(queue);

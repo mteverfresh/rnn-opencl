@@ -39,28 +39,33 @@ endif
 #$(error Set ALTERAOCLSDKROOT to the root directory of the Intel(R) FPGA SDK for OpenCL(TM) software installation.)
 #endif
 
+# OpenCL compile and link flags.
+AOCL_COMPILE_CONFIG := $(shell aocl compile-config --arm)
+AOCL_LINK_CONFIG := $(shell aocl link-config --arm) -lacl_emulator_kernel_rt
+
 # Compilation flags
 ifeq ($(DEBUG),1)
 CXXFLAGS += -g -Wall
 else
-CXXFLAGS += -g
+CXXFLAGS += -g -ggdb #-O2
 endif
-LFLAGS += -lOpenCL
+
+CPPFLAGS += -g
 
 # Compiler
-CXX := g++
+CXX := arm-linux-gnueabihf-g++
 
 # Target
 TARGET := host
-TARGET_DIR := .
+TARGET_DIR := bin
 
 # Directories
-INC_DIRS := 
+INC_DIRS := $(CL_INC_DIR)
 LIB_DIRS := 
 
 # Files
-INCS := $(wildcard *.h)
-SRCS := $(wildcard *.cpp)
+INCS := $(wildcard *.h *.hpp)
+SRCS := $(wildcard *.cpp $(CL_SRC_DIR)/*.cpp)
 LIBS := rt pthread
 
 # Make it all!
@@ -69,14 +74,22 @@ all : $(TARGET_DIR)/$(TARGET)
 # Host executable target.
 $(TARGET_DIR)/$(TARGET) : Makefile $(SRCS) $(INCS) $(TARGET_DIR)
 	$(ECHO)$(CXX) $(CPPFLAGS) $(CXXFLAGS) -fPIC $(foreach D,$(INC_DIRS),-I$D) \
-			$(SRCS) \
+			$(AOCL_COMPILE_CONFIG) $(SRCS) $(AOCL_LINK_CONFIG) \
 			$(foreach D,$(LIB_DIRS),-L$D) \
 			$(foreach L,$(LIBS),-l$L) \
-			-o $(TARGET_DIR)/$(TARGET) $(LFLAGS)
+			-o $(TARGET_DIR)/$(TARGET)
 
 $(TARGET_DIR) :
 	$(ECHO)mkdir $(TARGET_DIR)
 	
+run : 
+	./bin/host graph_files/beg_20_16.0_0_of_1_1.bin graph_files/csr_20_16.0_0_of_1_1.bin graph_files/toy.dat_weight_file.bin 1 4
+runtoy : 
+	./bin/host graph_files/toy.dat_beg_pos.bin graph_files/toy.dat_csr.bin graph_files/toy.dat_weight.bin 1 4
+rundebug :
+	env CL_CONTEXT_EMULATOR_DEVICE_ALTERA=1 gdb --args ./bin/host graph_files/beg_20_16.0_0_of_1_1.bin graph_files/csr_20_16.0_0_of_1_1.bin graph_files/toy.dat_weight_file.bin 1 4
+rundebugtoy :
+	env CL_CONTEXT_EMULATOR_DEVICE_ALTERA=1 gdb --args ./bin/host graph_files/toy.dat_beg_pos.bin graph_files/toy.dat_csr.bin graph_files/toy.dat_weight.bin 1 4
 # Standard make targets
 clean :
 	$(ECHO)rm -f $(TARGET_DIR)/$(TARGET)
