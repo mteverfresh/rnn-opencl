@@ -41,7 +41,7 @@ endif
 
 # OpenCL compile and link flags.
 AOCL_COMPILE_CONFIG := $(shell aocl compile-config)
-AOCL_LINK_CONFIG := $(shell aocl link-config) -lOpenCL
+AOCL_LINK_CONFIG := $(shell aocl link-config) -lacl_emulator_kernel_rt
 
 # Compilation flags
 ifeq ($(DEBUG),1)

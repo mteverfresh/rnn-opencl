@@ -10,8 +10,6 @@ Date		|	Change
 11/04/18	|	File created to provide the acceleration for the LSTM.
 		|
 11/21/18	|	All kernels finished. Proceeding with testing for 2-input kernels.
-		|	
-11/28/18	|	Out of time! Adapting for single pass kernels.
 
 */
 
@@ -24,8 +22,19 @@ Date		|	Change
 
 #define INDEX(ROW, COLUMN, WIDTH) ((ROW) * (WIDTH) + (COLUMN))
 
+__kernel void matrix_add(
+	__global const	float *restrict a,
+	__global const	float *restrict b,
+	__global	float *restrict out
+)
+{
+	const int tid = get_global_id(X);
+	out[tid] = a[tid] + b[tid];
+}
+
+//requries 2d kernel of 128*6
 __attribute__((max_work_group_size(MAX_WINDOW_SIZE)))
-__kernel void sigpass(
+__kernel void matrix_mul(
 	__global const	float *restrict a,
 	__global const	float *restrict b,
 	__global	float *restrict out
@@ -59,8 +68,25 @@ __kernel void sigpass(
 			barrier(CLK_GLOBAL_MEM_FENCE);
 			if(tid == 0)
 			{
-				out[INDEX(i, j, SOURCES)] = 1.0 / (1 + exp(-(products[0] + a[j])));
+				out[INDEX(i, j, SOURCES)] = products[0];
 			}
 		}
 	}
+}
+
+__kernel void sigmoid_activation(
+	__global const	float *restrict input,
+	__global 	float *restrict output
+)
+{
+	int tid = get_global_id(0);
+	output[tid] = 1.0 / (1 + exp(-input[tid]));
+}
+__kernel void tanh_activation(
+	__global const	float *restrict input,
+	__global 	float *restrict output
+)
+{
+	int tid = get_global_id(0);
+	output[tid] = tanh(input[tid]);
 }
